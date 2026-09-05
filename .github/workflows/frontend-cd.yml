@@ -1,4 +1,4 @@
-name: Frontend CD
+name: Frontend Continuous Deployment
 
 on:
   push:
@@ -11,11 +11,12 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version-file: 'starter/frontend/.nvmrc'
 
@@ -29,11 +30,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version-file: 'starter/frontend/.nvmrc'
 
@@ -52,11 +54,79 @@ jobs:
       - test
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name cluster
+
+      - name: Get backend LoadBalancer URL
+        id: backend-url
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            BACKEND_HOST=$(kubectl get service backend \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+
+            if [ -z "$BACKEND_HOST" ]; then
+              BACKEND_HOST=$(kubectl get service backend \
+                -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            fi
+
+            if [ -n "$BACKEND_HOST" ]; then
+              echo "backend_url=http://$BACKEND_HOST" >> "$GITHUB_OUTPUT"
+              echo "Backend LoadBalancer found."
+              break
+            fi
+
+            echo "Waiting for backend LoadBalancer..."
+            sleep 10
+          done
+
+          if [ -z "$BACKEND_HOST" ]; then
+            echo "Backend LoadBalancer was not found."
+            exit 1
+          fi
 
       - name: Build Docker image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          REACT_APP_MOVIE_API_URL: ${{ steps.backend-url.outputs.backend_url }}
         run: |
           docker build \
-            --build-arg REACT_APP_MOVIE_API_URL=http://localhost:5000 \
-            -t mp-frontend:${{ github.sha }} \
+            --build-arg REACT_APP_MOVIE_API_URL="$REACT_APP_MOVIE_API_URL" \
+            -t "$REGISTRY/frontend:$IMAGE_TAG" \
             ./starter/frontend
+
+      - name: Push Docker image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push "$REGISTRY/frontend:$IMAGE_TAG"
+
+      - name: Deploy frontend to EKS
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        working-directory: starter/frontend
+        run: |
+          kubectl apply -k k8s
+          kubectl set image deployment/frontend \
+            frontend="$REGISTRY/frontend:$IMAGE_TAG"
+          kubectl rollout status deployment/frontend --timeout=5m
