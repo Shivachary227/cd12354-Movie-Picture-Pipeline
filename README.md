@@ -1,3 +1,20 @@
+# CI/CD Verification
+
+## GitHub Actions Workflows
+
+The project includes the following GitHub Actions workflows:
+
+- Frontend CI
+- Backend CI
+- Frontend CD
+- Backend CD
+
+All four workflows have been successfully executed.
+
+## Evidence
+
+Screenshots of the successful CI/CD workflow runs are available in the `screenshots` folder.
+
 # Movie Picture Pipeline
 
 You've been brought on as the DevOps resource for a development team that manages a web application that is a catalog of Movie Picture movies. They're in dire need of automating their development workflows in hopes of accelerating their release cycle. They'd like to use Github Actions to automate testing, building and deploying their applications to an existing Kubernetes cluster.
